@@ -160,3 +160,118 @@ server aarch64 GNU/Linux
 node-0 aarch64 GNU/Linux
 node-1 aarch64 GNU/Linux
 ```
+
+## Provisioning a CA and Generating TLS Certificates
+
+### Creating a Certificate Authority
+
+We now need to bootstrap a Certificate Authority (CA) to allow HTTPS communication between Kubernetes components. I started by creating a self-signed CA, which will be used to issue certificates for the components of the Kubernetes cluster *(self-signed is not ideal for production, but will suffice for this exercise)*.
+
+```bash
+# create private key
+openssl genrsa -out ca.key 4096
+
+# create root certificate
+openssl req -x509 -new -sha512 -noenc \
+  -key ca.key -days 3653 \
+  -config ca.conf \
+  -out ca.crt
+```
+
+This generates a private key `ca.key` – used to sign and issue other certificates – and a root certificate `ca.crt` – to be distributed to cluster components so that they can trust the certificates issued by this CA.
+
+### Creating client and server certificates
+
+Next, I generated certificate pairs and private keys for the Kubernetes client and server components.
+
+```bash
+certs=(
+  "admin" "node-0" "node-1"
+  "kube-proxy" "kube-scheduler"
+  "kube-controller-manager"
+  "kube-api-server"
+  "service-accounts"
+)
+
+for i in ${certs[*]}; do
+  openssl genrsa -out "${i}.key" 4096
+
+  openssl req -new -key "${i}.key" -sha256 \
+    -config "ca.conf" -section ${i} \
+    -out "${i}.csr"
+
+  openssl x509 -req -days 3653 -in "${i}.csr" \
+    -copy_extensions copyall \
+    -sha256 -CA "ca.crt" \
+    -CAkey "ca.key" \
+    -CAcreateserial \
+    -out "${i}.crt"
+done
+```
+
+This created a certificate (`.crt`), certificate signing request (`.csr`), and private key (`.key`) for each of the necessary Kubernetes components.
+
+```bash
+ls -1 *.crt *.key *.csr
+```
+
+```
+admin.crt
+admin.csr
+admin.key
+ca.crt
+ca.key
+kube-api-server.crt
+kube-api-server.csr
+kube-api-server.key
+kube-controller-manager.crt
+kube-controller-manager.csr
+kube-controller-manager.key
+kube-proxy.crt
+kube-proxy.csr
+kube-proxy.key
+kube-scheduler.crt
+kube-scheduler.csr
+kube-scheduler.key
+node-0.crt
+node-0.csr
+node-0.key
+node-1.crt
+node-1.csr
+node-1.key
+service-accounts.crt
+service-accounts.csr
+service-accounts.key
+```
+### Distributing the client and server certificates
+
+Once the client and server certificates had been generated, I continued to distribute the certificates to their respective Kubernetes components.
+
+Firstly, the clients:
+
+```bash
+for host in node-0 node-1; do
+  # create /var/lib/kubelet/ in each host
+  ssh root@$host mkdir /var/lib/kubelet/
+
+  # copy root certificate
+  scp ca.crt root@$host:/var/lib/kubelet/
+
+  # copy relevant client certificate
+  scp $host.crt root@$host:/var/lib/kubelet/kubelet.crt
+
+  # copy relevant client private key
+  scp $host.key root@$host:/var/lib/kubelet/kubelet.key
+done
+```
+
+And finally, the server:
+
+```bash
+scp \
+  ca.key ca.crt \
+  kube-api-server.key kube-api-server.crt \
+  service-accounts.key service-accounts.crt \
+  root@server:~/
+```
+
