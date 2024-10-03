@@ -275,3 +275,156 @@ scp \
   root@server:~/
 ```
 
+## Generating Kubernetes Configuration Files for Authentication
+
+Next, I needed to create a `kubeconfig` file. From the docs:
+
+> Use kubeconfig files to organise information about clusters, users, namespaces, and authentication mechanisms. The `kubectl` command-line tool uses kubeconfig files to find the information it needs to choose a cluster and communicate with the API server of a cluster.
+
+Thankfully, the `kubectl` CLI provides a `config` subcommand that can handle the creation of these files. From `jumpbox` I started with the worker nodes, `node-0` and `node-1`:
+
+```bash
+for host in node-0 node-1; do
+  # set up the cluster config
+  kubectl config set-cluster bootstrap \
+    --certificate-authority=ca.crt \
+    --embed-certs=true \
+    --server=https://server.kubernetes.local:6443 \
+    --kubeconfig=${host}.kubeconfig
+
+  # set credentials using the certs from earlier
+  kubectl config set-credentials system:node:${host} \
+    --client-certificate=${host}.crt \
+    --client-key=${host}.key \
+    --embed-certs=true \
+    --kubeconfig=${host}.kubeconfig
+
+  # create a context to tie the cluster together
+  kubectl config set-context default \
+    --cluster=bootstrap \
+    --user=system:node:${host} \
+    --kubeconfig=${host}.kubeconfig
+
+  # set the active context
+  kubectl config use-context default \
+    --kubeconfig=${host}.kubeconfig
+done
+```
+
+I then needed to repeat these steps to create `kubeconfig` files for each of the Kubernetes components.
+
+kube-proxy:
+
+```bash
+  kubectl config set-cluster bootstrap \
+    --certificate-authority=ca.crt \
+    --embed-certs=true \
+    --server=https://server.kubernetes.local:6443 \
+    --kubeconfig=kube-proxy.kubeconfig
+
+  kubectl config set-credentials system:kube-proxy \
+    --client-certificate=kube-proxy.crt \
+    --client-key=kube-proxy.key \
+    --embed-certs=true \
+    --kubeconfig=kube-proxy.kubeconfig
+
+  kubectl config set-context default \
+    --cluster=bootstrap \
+    --user=system:kube-proxy \
+    --kubeconfig=kube-proxy.kubeconfig
+
+  kubectl config use-context default \
+    --kubeconfig=kube-proxy.kubeconfig
+```
+
+kube-controller-manager:
+
+```bash
+  kubectl config set-cluster bootstrap \
+    --certificate-authority=ca.crt \
+    --embed-certs=true \
+    --server=https://server.kubernetes.local:6443 \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+  kubectl config set-credentials system:kube-controller-manager \
+    --client-certificate=kube-controller-manager.crt \
+    --client-key=kube-controller-manager.key \
+    --embed-certs=true \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+  kubectl config set-context default \
+    --cluster=bootstrap \
+    --user=system:kube-controller-manager \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+  kubectl config use-context default \
+    --kubeconfig=kube-controller-manager.kubeconfig
+```
+
+kube-scheduler:
+
+```bash
+  kubectl config set-cluster bootstrap \
+    --certificate-authority=ca.crt \
+    --embed-certs=true \
+    --server=https://server.kubernetes.local:6443 \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+  kubectl config set-credentials system:kube-scheduler \
+    --client-certificate=kube-scheduler.crt \
+    --client-key=kube-scheduler.key \
+    --embed-certs=true \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+  kubectl config set-context default \
+    --cluster=bootstrap \
+    --user=system:kube-scheduler \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+  kubectl config use-context default \
+    --kubeconfig=kube-scheduler.kubeconfig
+```
+
+admin:
+
+```bash
+  kubectl config set-cluster bootstrap \
+    --certificate-authority=ca.crt \
+    --embed-certs=true \
+    --server=https://127.0.0.1:6443 \
+    --kubeconfig=admin.kubeconfig
+
+  kubectl config set-credentials admin \
+    --client-certificate=admin.crt \
+    --client-key=admin.key \
+    --embed-certs=true \
+    --kubeconfig=admin.kubeconfig
+
+  kubectl config set-context default \
+    --cluster=bootstrap \
+    --user=admin \
+    --kubeconfig=admin.kubeconfig
+
+  kubectl config use-context default \
+    --kubeconfig=admin.kubeconfig
+```
+
+Finally, these `kubeconfig` files needed to be distributed across the server and worker nodes.
+
+```bash
+# worker nodes
+for host in node-0 node-1; do
+  scp kube-proxy.kubeconfig \
+    root@$host:/var/lib/kube-proxy/kubeconfig \
+  
+  scp ${host}.kubeconfig \
+    root@$host:/var/lib/kubelet/kubeconfig
+done
+
+# server
+scp admin.kubeconfig \
+  kube-controller-manager.kubeconfig \
+  kube-scheduler.kubeconfig \
+  root@server:~/
+```
+
